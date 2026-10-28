@@ -21,6 +21,8 @@
 #include <esp_sleep.h>
 #include <driver/uart.h>
 #include <driver/gpio.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #if __has_include(<soc/uart_channel.h>)
   #include <soc/uart_channel.h>
 #endif
@@ -47,6 +49,53 @@ static void swSave(bool on) {
   s_enabled = on ? 1 : 0;
 }
 
+// "tsim wake": pulse UART0 TX (GPIO43 on the Heltec V3) low so a LilyGO T-SIM wired as
+// TX43 -> 1N5817 -> GPIO6 (+100 nF to GND, pull-up) wakes from deep sleep (ext1 any-low).
+// The TX signal is inverted in the UART itself (uart_set_line_inverse), so the pin never
+// leaves the UART and the console keeps working. Then a marker line is printed a few times
+// so an awake T-SIM can tell a wake request from a Heltec reboot (boot banner).
+#ifndef TSIM_WAKE_PULSES
+  #define TSIM_WAKE_PULSES 3
+#endif
+#ifndef TSIM_WAKE_LOW_MS
+  #define TSIM_WAKE_LOW_MS 20      // each low pulse (T-SIM: < 2 s, its "stuck low" limit)
+#endif
+#ifndef TSIM_WAKE_GAP_MS
+  #define TSIM_WAKE_GAP_MS 100     // high between pulses (100 nF recharges through the pull-up in ~15 ms)
+#endif
+#ifndef TSIM_WAKE_MARKS
+  #define TSIM_WAKE_MARKS 3        // marker lines, TSIM_WAKE_MARK_MS apart, starting TSIM_WAKE_MARK_MS after the pulses
+#endif
+#ifndef TSIM_WAKE_MARK_MS
+  #define TSIM_WAKE_MARK_MS 1500
+#endif
+#define TSIM_WAKE_MARKER "TSIM-WAKE: wake request from the repeater (not a reboot)"
+static volatile uint32_t s_tw_until = 0;   // stay awake until the markers are out
+static volatile bool s_tw_busy = false;
+
+static void twTask(void*) {
+  for (int i = 0; i < TSIM_WAKE_MARKS; i++) {
+    vTaskDelay(pdMS_TO_TICKS(TSIM_WAKE_MARK_MS));
+    Serial.println(TSIM_WAKE_MARKER);
+  }
+  Serial.flush();
+  s_tw_busy = false;
+  vTaskDelete(NULL);
+}
+
+static void twStart() {
+  Serial.flush();                    // nothing in flight while TX is inverted
+  for (int i = 0; i < TSIM_WAKE_PULSES; i++) {
+    uart_set_line_inverse(UART_NUM_0, UART_SIGNAL_TXD_INV);    // idle TX = low
+    delay(TSIM_WAKE_LOW_MS);
+    uart_set_line_inverse(UART_NUM_0, UART_SIGNAL_INV_DISABLE); // back to normal (idle high)
+    if (i + 1 < TSIM_WAKE_PULSES) delay(TSIM_WAKE_GAP_MS);
+  }
+  s_tw_until = millis() + (uint32_t)TSIM_WAKE_MARK_MS * (TSIM_WAKE_MARKS + 1);
+  s_tw_busy = true;
+  if (xTaskCreate(twTask, "tsimwake", 2048, NULL, 1, NULL) != pdPASS) { s_tw_busy = false; Serial.println(TSIM_WAKE_MARKER); }
+}
+
 static void swOnRx() { s_awake_until = millis() + SERIAL_WAKE_HOLD_MS; }
 
 static void swInit() {
@@ -64,6 +113,16 @@ static void swInit() {
 namespace SerialWake {
 
 bool handleCommand(const char* command, char* reply) {
+  if (strcmp(command, "tsim wake") == 0) {
+#ifdef SERIAL_WAKE_UART
+    if (s_tw_busy) { strcpy(reply, "Error: tsim wake already running"); return true; }
+    twStart();
+    sprintf(reply, "OK - tsim wake: %d x %d ms low on UART0 TX, then marker lines", TSIM_WAKE_PULSES, TSIM_WAKE_LOW_MS);
+#else
+    strcpy(reply, "Error: tsim wake needs an ESP32 with the serial console on UART0");
+#endif
+    return true;
+  }
   if (strncmp(command, "set serial.ondemand ", 20) == 0) {
     const char* v = command + 20;
 #ifdef SERIAL_WAKE_UART
@@ -89,6 +148,7 @@ bool handleCommand(const char* command, char* reply) {
 
 bool beforeSleep() {
 #ifdef SERIAL_WAKE_UART
+  if (s_tw_busy || (int32_t)(s_tw_until - millis()) > 0) return true;   // tsim wake markers still pending
   if (!swEnabled()) {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_UART);
     return false;

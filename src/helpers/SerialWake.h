@@ -6,6 +6,8 @@
 //  - CLI (serial and remote admin): "set serial.ondemand on|off" (default on), "get serial.ondemand".
 //    Stored in NVS (namespace "serialwake"), so it survives reboots and firmware updates
 //    without changing the upstream prefs file layout.
+//  - CLI "tsim wake": pulse UART0 TX low 3 x 20 ms (wakes a T-SIM wired TX43 -> diode -> GPIO6),
+//    then print "TSIM-WAKE: ..." 3 times, 1.5 s apart. Works with serial.ondemand on or off.
 // The byte that wakes the MCU is lost: send a CR/LF first, wait ~100 ms, then the command.
 
 namespace SerialWake {
