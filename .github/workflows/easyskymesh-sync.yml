@@ -6,6 +6,7 @@ name: EasySkyMesh sync + release
 # it (.tsim/sync.sh, 3-way), built, and published as a release marked Latest; then branch
 # "tsim" is fast-forwarded. Firmware changes pushed to "tsim" are released the same way.
 # Conflicts or failed builds publish NOTHING: the run fails and an issue is opened.
+# Docs: .tsim/README.md
 
 on:
   schedule:
