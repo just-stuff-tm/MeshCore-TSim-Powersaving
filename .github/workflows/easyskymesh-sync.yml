@@ -1,4 +1,4 @@
-name: EasySkyMesh sync + release
+name: MeshCore-TSim-Powersaving release (EasySkyMesh sync)
 
 # Daily: look at the newest IoTThinks/EasySkyMesh release. Its source is an IoTThinks/MeshCore
 # "PowerSaving-vNN" branch (named in the release notes). If that branch moved, our T-SIM delta
@@ -19,6 +19,10 @@ on:
         required: false
       force:
         description: 'Build and release even if nothing changed'
+        type: boolean
+        default: false
+      publish:
+        description: 'Publish and mark Latest (off = leave a draft release)'
         type: boolean
         default: false
       envs:
@@ -94,9 +98,14 @@ jobs:
             C=$(git rev-parse HEAD)
           fi
           S7=${C:0:7}
-          BASEVER=$(grep -oE '"v[0-9]+\.[0-9]+\.[0-9]+' examples/simple_repeater/MyMesh.h | head -1 | tr -d '"')
-          PS=$(sed -E 's/^PowerSaving/ps/' <<<"$TAG")
-          FW="${BASEVER}-${PS}-tsim-${S7}"
+          # Version = MeshCore-TSim-Powersaving<upstream N>.<our build B>: B = 1 + the highest published B on that N
+          N=$(sed -E 's/^PowerSaving//' <<<"$TAG")
+          PFX="MeshCore-TSim-Powersaving${N}."
+          B=0
+          for t in $(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|select(.draft|not)|.tag_name'); do
+            case "$t" in "$PFX"*) n=${t#"$PFX"}; if [[ "$n" =~ ^[0-9]+$ ]] && (( n > B )); then B=$n; fi;; esac
+          done
+          FW="${PFX}$(( B + 1 ))"
           BUILD=true
           if [ "$SYNCED" = false ] && [ "${IN_FORCE:-false}" != true ]; then
             LAST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .target_commitish 2>/dev/null || true)
@@ -164,8 +173,7 @@ jobs:
             if bash build.sh build-firmware "$e"; then
               for f in out/*; do
                 [ -e "$f" ] || continue
-                b=$(basename "$f"); b=${b/-freshInstall-merged.bin/-merged.bin}; b=${b/-upgrade.bin/.bin}
-                mv "$f" "dist/$b"
+                mv "$f" dist/
               done
             else echo "::warning::$e failed"; rm -f out/*; fi
             echo "::endgroup::"
@@ -211,7 +219,7 @@ jobs:
               for k in sorted(fam): f.write(f"- **{k}**: {', '.join(fam[k])}\n")
           print(f"{len(files)} files, {len(envs)-len(failed)}/{len(envs)} envs built")
           if failed: print("not built: " + " ".join(failed))
-          miss = [r for r in os.environ["REQUIRED"].split() if not (f"{r}-{fw}.bin" in files and f"{r}-{fw}-merged.bin" in files)]
+          miss = [r for r in os.environ["REQUIRED"].split() if not (f"{r}-{fw}-upgrade.bin" in files and f"{r}-{fw}-freshInstall-merged.bin" in files)]
           if miss: raise SystemExit(f"required Heltec V3 builds missing: {miss}; not publishing")
           if len(failed) * 2 > len(envs): raise SystemExit("more than half the envs failed; not publishing")
           if len(files) > 990: raise SystemExit("too many files for one release (GitHub limit 1000)")
@@ -222,17 +230,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FW: ${{ needs.plan.outputs.fwver }}
           SHA: ${{ needs.plan.outputs.sha }}
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish == true }}
           ESM_TAG: ${{ needs.plan.outputs.esm_tag }}
           ESM_BRANCH: ${{ needs.plan.outputs.esm_branch }}
           ESM_SHA: ${{ needs.plan.outputs.esm_sha }}
         run: |
           set -euo pipefail
-          TITLE="EasySkyMesh ${ESM_TAG} + T-SIM (${FW})"
+          TITLE="${FW}"
           {
             echo "## ${TITLE}"; echo
             echo "- Base: [EasySkyMesh ${ESM_TAG}](https://github.com/${ESM_RELEASES}/releases/tag/${ESM_TAG}), source [${ESM_SOURCE}@${ESM_BRANCH}](https://github.com/${ESM_SOURCE}/tree/${ESM_BRANCH}) (${ESM_SHA:0:7}). Power saving is EasySkyMesh's own."
             echo "- Added here: \`serial.ondemand\` (serial console keeps working during power saving), screenless Heltec V3 envs, \`isReadBusy()\` for every serial interface, and \`tsim wake\`."
-            echo "- Source: [${SHA:0:7}](https://github.com/${GITHUB_REPOSITORY}/commit/${SHA}). Checksums: \`SHA256SUMS.txt\`."
+            echo "- Version (\`ver\`): \`${FW}\`, EasySkyMesh ${ESM_TAG} + our build $(sed 's/.*\.//' <<<"$FW")."
+            echo "- Source: commit [${SHA:0:7}](https://github.com/${GITHUB_REPOSITORY}/commit/${SHA}). Checksums: \`SHA256SUMS.txt\`."
             echo
             cat .tsim/notes.md.in
             echo
@@ -291,6 +301,10 @@ jobs:
               if st not in (201, 422): raise SystemExit(f"upload of {f} failed: {st} {r}")
               if i % 50 == 0: print(f"  {i}/{len(todo)}", flush=True)
               time.sleep(1)
+          if os.environ.get("PUBLISH") != "true":
+              st, r = req("PATCH", f"{API}/releases/{rid}", json.dumps({"name": os.environ["TITLE"], "body": notes}).encode())
+              print(f"left as DRAFT {r['html_url']} with {len(r['assets'])} assets (run with publish to release)")
+              raise SystemExit(0)
           st, r = req("PATCH", f"{API}/releases/{rid}", json.dumps({"name": os.environ["TITLE"], "body": notes,
               "draft": False, "make_latest": "true"}).encode())
           if st != 200: raise SystemExit(f"could not publish: {st} {r}")
@@ -299,7 +313,7 @@ jobs:
           print(f"published {r['html_url']} with {len(r['assets'])} assets, marked Latest")
           PY
       - name: Fast-forward tsim to the released sync
-        if: needs.plan.outputs.synced == 'true'
+        if: needs.plan.outputs.synced == 'true' && (github.event_name == 'schedule' || inputs.publish == true)
         run: git push origin "${{ needs.plan.outputs.sha }}:refs/heads/tsim"
 
   report-failure:

@@ -2,7 +2,7 @@
 
 Use the MeshCore web flasher, https://flasher.meshcore.io (Chrome or Edge) → **Custom Firmware** → pick the file → **Flash!**
 
-- **ESP32 boards (Heltec V3 and others):** the plain `.bin` updates and keeps the node's identity and settings. `-merged.bin` is a fresh install that erases them.
+- **ESP32 boards (Heltec V3 and others):** `-upgrade.bin` updates and keeps the node's identity and settings. `-freshInstall-merged.bin` is a fresh install that erases them.
 - **nRF52 boards (RAK4631, T114, ...):** the `.zip` is a DFU package (Custom Firmware, use **Enter DFU mode** first if needed, or press the board's DFU/reset button twice). Or put the board in its bootloader and drag the `.uf2` onto the USB drive.
 - **Screenless Heltec V3 builds:** `Heltec_v3_repeater_headless`, `Heltec_v3_room_server_headless`, `Heltec_v3_companion_radio_usb_headless`, `Heltec_v3_companion_radio_ble_headless`. Flash them like the normal Heltec V3 files. No display; the OLED is held off from boot to save power.
 
@@ -13,4 +13,4 @@ Use the MeshCore web flasher, https://flasher.meshcore.io (Chrome or Edge) → *
 
 ## Remote updates and dashboard (T-SIM)
 
-[tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater) manages a solar repeater over LTE through a LilyGO T-SIM wired to the Heltec's serial port (telemetry, settings, CLI) and installs these releases over the air. It always uses the plain `Heltec_v3_repeater...bin` (never `-merged`), so identity and settings are kept.
+[tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater) manages a solar repeater over LTE through a LilyGO T-SIM wired to the Heltec's serial port (telemetry, settings, CLI) and installs these releases over the air. It always uses `Heltec_v3_repeater...-upgrade.bin` (never `-freshInstall-merged`), so identity and settings are kept.

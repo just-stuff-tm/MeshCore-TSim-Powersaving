@@ -1,4 +1,4 @@
-# EasySkyMesh-TSim
+# MeshCore-TSim-Powersaving
 
 EasySkyMesh power-saving MeshCore with a small T-SIM delta on top. Upstream power saving is used as is (not re-ported).
 
@@ -21,13 +21,13 @@ Wake-then-command, for a LilyGO T-SIM wired Heltec TX43 → 1N5817 → T-SIM GPI
 **Field note (Oct 2026):** the installed treenode wire shows 0 GPIO6 pulses, so this can't wake that T-SIM until the wire is fixed on site. **T-SIM side:** not released; T-SIM v1.7.6 treats any GPIO6 wake as a Heltec reboot. Design: [tsim-remote-updater `design/tsim-wake-frames`](https://github.com/just-stuff-tm/tsim-remote-updater/blob/design/tsim-wake-frames/docs/tsim-wake-frames.md).
 
 ## Release automation
-`.github/workflows/easyskymesh-sync.yml`, daily at 11:23 UTC and on demand (Actions → Run workflow; inputs: release, force, envs regex).
+`.github/workflows/easyskymesh-sync.yml`, on demand (Actions → Run workflow; inputs: release, force, publish, envs regex). The daily schedule (11:23 UTC) is commented out until publishing is approved. A manual run leaves a DRAFT unless `publish` is ticked; scheduled runs publish.
 - Reads the newest IoTThinks/EasySkyMesh release and the `IoTThinks/MeshCore/tree/<branch>` it names. If that branch head differs from `.tsim/upstream.sha`, `.tsim/sync.sh` re-applies our delta (diff from `.tsim/upstream.sha` to `tsim`, outside `.github`/`.tsim`) 3-way onto it and commits it as one commit on `tsim` (upstream workflow files are not imported, so the Actions token can push it), pushed first to `sync/<release>-<sha>`.
 - Builds envs matching `repeater|room_server|^heltec_v3` (about 260) in up to 20 parallel jobs.
-- Publishes only if `Heltec_v3_repeater` and `Heltec_v3_repeater_headless` built (plain + merged) and at least half the envs built; marks it Latest, then fast-forwards `tsim`. Release notes list not-built envs by family.
+- Publishes only if `Heltec_v3_repeater` and `Heltec_v3_repeater_headless` built (plain + merged) and at least half the envs built; publishes it marked Latest (or leaves a draft), then fast-forwards `tsim` (publish only). Release notes list not-built envs by family.
 - Conflicts or failures: nothing is published, the run fails, and an issue is opened.
 - Firmware pushed to `tsim` without an upstream change is released on the next daily run (doc-only changes are skipped).
 
-Tag and version: `<MeshCore base>-ps<NN>-tsim-<commit>`, e.g. `v1.18.0-ps18-tsim-abc1234` (also what `ver` shows). Files: `<env>-<version>.bin` (update, keeps identity), `<env>-<version>-merged.bin` (fresh install), nRF52 `.zip`/`.uf2`, plus `SHA256SUMS.txt`.
+Version, tag and title: `MeshCore-TSim-Powersaving<N>.<B>`, e.g. `MeshCore-TSim-Powersaving18.1` (also what `ver` shows). N = the EasySkyMesh release number (PowerSaving18 → 18); B = our build on that upstream (18.1, 18.2, ...; back to .1 for PowerSaving19). Files, EasySkyMesh style: `<env>-MeshCore-TSim-Powersaving18.1-upgrade.bin` (update, keeps identity), `<env>-MeshCore-TSim-Powersaving18.1-freshInstall-merged.bin` (fresh install), nRF52 `<env>-MeshCore-TSim-Powersaving18.1.uf2`/`.zip`, plus `SHA256SUMS.txt`. No commit in file names; the release body names the commit.
 
 Predecessor: just-stuff-tm/MeshCore (stock MeshCore + our power-saving port), archived read-only; its releases stay downloadable.
