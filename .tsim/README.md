@@ -8,14 +8,17 @@ EasySkyMesh power-saving MeshCore with a small T-SIM delta on top. Upstream powe
 - **isReadBusy()** for the Ethernet (CH390/RAK13800) and RP2040 BLE serial interfaces, and a guard for meshsolar's `NONE` macro.
 - **`tsim wake`** (CLI, serial or remote admin; ESP32 with the console on UART0). See below.
 
-## `tsim wake`
-1. Flushes the console, then inverts UART0 TX in the UART (`uart_set_line_inverse`) 3 times for 20 ms, 100 ms apart. The TX pin (GPIO43 on the Heltec V3) never leaves the UART, so the console keeps working. Tunable at build time: `TSIM_WAKE_PULSES`, `TSIM_WAKE_LOW_MS`, `TSIM_WAKE_GAP_MS`.
-2. Prints `TSIM-WAKE: wake request from the repeater (not a reboot)` 3 times, 1.5 s apart (`TSIM_WAKE_MARKS`, `TSIM_WAKE_MARK_MS`), from a small task, and keeps the board out of light sleep until they're out.
-3. Replies `OK - tsim wake: 3 x 20 ms low on UART0 TX, then marker lines`. Works with serial.ondemand on or off.
+## `tsim wake [status|modem_reset|<word>]`
+Wake-then-command, for a LilyGO T-SIM wired Heltec TX43 → 1N5817 → T-SIM GPIO6 (100 nF to GND, internal pull-up, ext1 any-low wake). CLI over serial or remote admin; ESP32 with the console on UART0 (Heltec V3). Works with serial.ondemand on or off.
+1. Flushes the console and inverts UART0 TX inside the UART (`uart_set_line_inverse`) 3 × 20 ms, 100 ms apart. GPIO43 never leaves the UART, so the console keeps working.
+2. Replies at once: `OK - tsim wake STATUS seq 4711: woke, sending; result in ~8 s (tsim last)`.
+3. After 1 s (T-SIM boot) a small task sends `@TSIM <CMD> <seq>\r\n` on the normal serial link (Heltec TX → T-SIM GPIO41, 115200), every 1.5 s, up to 5 times, until the T-SIM answers `@TSIM ACK <seq>` on the console (handled silently, no reply line). The board stays out of light sleep meanwhile.
+4. Prints `TSIM-WAKE: STATUS seq 4711: ACK after 1320 ms (1 sent)` or `... no ACK after 5 tries ...`; `tsim last` shows the same line (use it over remote admin).
+- CMD: bare `tsim wake` sends `WAKE`; `status` → `STATUS`, `modem_reset` → `MODEM_RESET`; any other `[A-Za-z0-9_]` word up to 15 chars is upper-cased and sent (the T-SIM's allowlist decides). seq starts random at boot and counts up.
+- Build-time knobs: `TSIM_WAKE_PULSES`, `TSIM_WAKE_LOW_MS`, `TSIM_WAKE_GAP_MS`, `TSIM_WAKE_BOOT_MS`, `TSIM_WAKE_RETRY_MS`, `TSIM_WAKE_TRIES`.
+- The repeater echoes serial input, so the T-SIM sees its own `@TSIM ACK` echoed back; it must ignore that.
 
-Wiring it expects on the T-SIM: Heltec TX43 → 1N5817 → T-SIM GPIO6, 100 nF to GND, internal pull-up; T-SIM ext1 any-low wake. **Field note (Oct 2026):** the installed treenode wire shows 0 GPIO6 pulses, so the command can't wake that T-SIM until the wire is fixed on site.
-
-**T-SIM side (not released yet):** T-SIM v1.7.6 treats every GPIO6 wake as a Heltec reboot (modem reset, reboot report, counts toward 6/day). To tell the two apart, after an ext1 wake it should open the Heltec UART for ~5 s and look for `TSIM-WAKE:` (a real reboot prints the ROM banner `rst:0x..` / `Repeater ID:` instead, or nothing it can catch). On the marker: count it as a wake request (own counter), bring the modem up without the reboot recovery reset, check SMS / post a check-in, and don't count it as a reboot or a spurious wake. As a second check, `stats-core` uptime > 60 s means the Heltec did not reboot. While awake, the marker line must not match the boot-line matcher (it doesn't).
+**Field note (Oct 2026):** the installed treenode wire shows 0 GPIO6 pulses, so this can't wake that T-SIM until the wire is fixed on site. **T-SIM side:** not released; T-SIM v1.7.6 treats any GPIO6 wake as a Heltec reboot. Design: [tsim-remote-updater `design/tsim-wake-frames`](https://github.com/just-stuff-tm/tsim-remote-updater/blob/design/tsim-wake-frames/docs/tsim-wake-frames.md).
 
 ## Release automation
 `.github/workflows/easyskymesh-sync.yml`, daily at 11:23 UTC and on demand (Actions → Run workflow; inputs: release, force, envs regex).

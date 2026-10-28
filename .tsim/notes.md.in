@@ -9,7 +9,7 @@ Use the MeshCore web flasher, https://flasher.meshcore.io (Chrome or Edge) → *
 **After flashing** (serial console at 115200 baud, or remote admin):
 - `powersaving on` turns power saving on.
 - `get serial.ondemand` should answer `on` (the serial console keeps working while the board sleeps). `set serial.ondemand off` gives EasySkyMesh's stock behaviour.
-- `tsim wake` (ESP32 with the console on UART0, e.g. Heltec V3): pulses UART0 TX (GPIO43) low 3 × 20 ms, then prints `TSIM-WAKE: ...` three times 1.5 s apart, to wake a LilyGO T-SIM wired TX43 → 1N5817 → GPIO6 (100 nF to GND). The T-SIM needs firmware that recognises the marker; older T-SIM firmware treats the wake as a Heltec reboot.
+- `tsim wake [status|modem_reset]` (Heltec V3 / ESP32 with the console on UART0): pulses UART0 TX (GPIO43) low 3 × 20 ms to wake a LilyGO T-SIM wired TX43 → 1N5817 → GPIO6, then sends `@TSIM <CMD> <seq>` over serial until the T-SIM answers `@TSIM ACK <seq>` (5 tries); `tsim last` shows the result. Needs T-SIM firmware that understands the frames (not released yet); older T-SIM firmware treats the wake as a Heltec reboot.
 
 ## Remote updates and dashboard (T-SIM)
 
