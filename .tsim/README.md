@@ -18,7 +18,7 @@ Wake-then-command, for a LilyGO T-SIM wired Heltec TX43 → 1N5817 → T-SIM GPI
 - Build-time knobs: `TSIM_WAKE_PULSES`, `TSIM_WAKE_LOW_MS`, `TSIM_WAKE_GAP_MS`, `TSIM_WAKE_BOOT_MS`, `TSIM_WAKE_RETRY_MS`, `TSIM_WAKE_TRIES`.
 - The repeater echoes serial input, so the T-SIM sees its own `@TSIM ACK` echoed back; it must ignore that.
 
-**Field note (Oct 2026):** the installed treenode wire shows 0 GPIO6 pulses, so this can't wake that T-SIM until the wire is fixed on site. **T-SIM side:** not released; T-SIM v1.7.6 treats any GPIO6 wake as a Heltec reboot. Design: [tsim-remote-updater `design/tsim-wake-frames`](https://github.com/just-stuff-tm/tsim-remote-updater/blob/design/tsim-wake-frames/docs/tsim-wake-frames.md).
+**Field note (Oct 2026):** the installed treenode wire shows 0 GPIO6 pulses, so this cannot wake that T-SIM until the wire is fixed on site. The T-SIM side is not released. Firmware v1.7.6 treats a GPIO6 wake as a Heltec reboot and ignores `@TSIM` frames. A local unreleased handler (v1.7.7) listens for those frames first. Do not flash it until the wire is fixed and you say to.
 
 ## Release automation
 `.github/workflows/easyskymesh-sync.yml`, on demand (Actions → Run workflow; inputs: release, force, publish, envs regex). The daily schedule (11:23 UTC) is commented out until publishing is approved. A manual run leaves a DRAFT unless `publish` is ticked; scheduled runs publish.
