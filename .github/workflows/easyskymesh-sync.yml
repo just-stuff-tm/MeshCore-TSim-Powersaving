@@ -9,8 +9,9 @@ name: EasySkyMesh sync + release
 # Docs: .tsim/README.md
 
 on:
-  schedule:
-    - cron: '23 11 * * *'   # 7:23 AM EDT / 6:23 AM EST
+  # HOLD (names not agreed yet): schedule off. Re-enable with:
+  # schedule:
+  #   - cron: '23 11 * * *'   # 7:23 AM EDT / 6:23 AM EST
   workflow_dispatch:
     inputs:
       release:
