@@ -1,0 +1,328 @@
+name: EasySkyMesh sync + release
+
+# Daily: look at the newest IoTThinks/EasySkyMesh release. Its source is an IoTThinks/MeshCore
+# "PowerSaving-vNN" branch (named in the release notes). If that branch moved, our T-SIM delta
+# (serial.ondemand, headless Heltec V3 envs, isReadBusy() fixes, "tsim wake") is re-applied on
+# it (.tsim/sync.sh, 3-way), built, and published as a release marked Latest; then branch
+# "tsim" is fast-forwarded. Firmware changes pushed to "tsim" are released the same way.
+# Conflicts or failed builds publish NOTHING: the run fails and an issue is opened.
+
+on:
+  schedule:
+    - cron: '23 11 * * *'   # 7:23 AM EDT / 6:23 AM EST
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'EasySkyMesh release tag (blank = latest)'
+        required: false
+      force:
+        description: 'Build and release even if nothing changed'
+        type: boolean
+        default: false
+      envs:
+        description: 'Env name regex (Python, case-insensitive)'
+        required: false
+        default: 'repeater|room_server|^heltec_v3'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: esm-sync
+  cancel-in-progress: false
+
+env:
+  ESM_RELEASES: IoTThinks/EasySkyMesh
+  ESM_SOURCE: IoTThinks/MeshCore
+  REQUIRED: 'Heltec_v3_repeater Heltec_v3_repeater_headless'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      synced: ${{ steps.plan.outputs.synced }}
+      fwver: ${{ steps.plan.outputs.fwver }}
+      esm_tag: ${{ steps.plan.outputs.esm_tag }}
+      esm_branch: ${{ steps.plan.outputs.esm_branch }}
+      esm_sha: ${{ steps.plan.outputs.esm_sha }}
+      conflicts: ${{ steps.plan.outputs.conflicts }}
+      matrix: ${{ steps.envs.outputs.matrix }}
+      envs: ${{ steps.envs.outputs.envs }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tsim
+          fetch-depth: 0
+      - name: Newest EasySkyMesh release vs our last sync
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IN_REL: ${{ inputs.release }}
+          IN_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "${IN_REL:-}" ]; then R=$(gh api "repos/$ESM_RELEASES/releases/tags/$IN_REL"); else R=$(gh api "repos/$ESM_RELEASES/releases/latest"); fi
+          TAG=$(jq -r .tag_name <<<"$R")
+          BR=$(jq -r .body <<<"$R" | grep -oE "$ESM_SOURCE/tree/[A-Za-z0-9._-]+" | head -1 | sed 's#.*/tree/##' || true)
+          if [ -z "$BR" ]; then N=$(sed -E 's/^PowerSaving//' <<<"$TAG"); BR="PowerSaving-v${N%%.*}"; echo "::warning::release notes name no source branch; guessing $BR"; fi
+          NEW=$(gh api "repos/$ESM_SOURCE/branches/$BR" --jq .commit.sha)
+          OLD=$(cat .tsim/upstream.sha)
+          echo "EasySkyMesh $TAG -> $ESM_SOURCE $BR @ $NEW (last synced ${OLD:0:7})"
+          { echo "esm_tag=$TAG"; echo "esm_branch=$BR"; echo "esm_sha=$NEW"; } >> "$GITHUB_OUTPUT"
+          SYNCED=false
+          if [ "$NEW" != "$OLD" ]; then
+            set +e; OUT=$(bash .tsim/sync.sh "$BR" "$NEW" "$TAG"); rc=$?; set -e
+            echo "$OUT"
+            if [ "$rc" = 3 ]; then
+              echo "conflicts=$(paste -sd, conflicts.txt)" >> "$GITHUB_OUTPUT"
+              { echo "## Conflict: T-SIM changes vs EasySkyMesh $TAG ($BR @ ${NEW:0:7})"; sed 's/^/- /' conflicts.txt; } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::our changes conflict with $BR @ ${NEW:0:7}; nothing built or released"; exit 1
+            fi
+            [ "$rc" = 0 ] || exit "$rc"
+            C=$(tail -1 <<<"$OUT")
+            SB="sync/${TAG}-${NEW:0:7}"
+            git push -f origin "$C:refs/heads/$SB"
+            SYNCED=true
+          else
+            C=$(git rev-parse HEAD)
+          fi
+          S7=${C:0:7}
+          BASEVER=$(grep -oE '"v[0-9]+\.[0-9]+\.[0-9]+' examples/simple_repeater/MyMesh.h | head -1 | tr -d '"')
+          PS=$(sed -E 's/^PowerSaving/ps/' <<<"$TAG")
+          FW="${BASEVER}-${PS}-tsim-${S7}"
+          BUILD=true
+          if [ "$SYNCED" = false ] && [ "${IN_FORCE:-false}" != true ]; then
+            LAST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .target_commitish 2>/dev/null || true)
+            if [ -n "$LAST" ] && git cat-file -e "$LAST^{commit}" 2>/dev/null && git diff --quiet "$LAST" "$C" -- . ':(exclude)*.md' ':(exclude).github' ':(exclude).tsim/*.md'; then
+              BUILD=false; echo "no firmware change since the latest release ($LAST); nothing to do"
+            fi
+          fi
+          { echo "build=$BUILD"; echo "sha=$C"; echo "synced=$SYNCED"; echo "fwver=$FW"; } >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD fwver=$FW sha=$C synced=$SYNCED"
+      - name: List envs
+        id: envs
+        if: steps.plan.outputs.build == 'true'
+        env:
+          RX: ${{ inputs.envs || 'repeater|room_server|^heltec_v3' }}
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, re
+          rx = re.compile(os.environ["RX"], re.I)
+          names = []
+          for f in sorted(glob.glob("variants/*/platformio.ini")):
+              names += re.findall(r"^\[env:([^\]\s]+)\]", open(f, errors="ignore").read(), re.M)
+          envs = sorted({n for n in names if rx.search(n)})
+          for r in os.environ["REQUIRED"].split():
+              if r not in envs: raise SystemExit(f"required env {r} not found")
+          n = max(1, min(20, (len(envs) + 11) // 12))
+          chunks = [envs[i::n] for i in range(n)]
+          m = {"include": [{"id": i, "envs": " ".join(c)} for i, c in enumerate(chunks)]}
+          with open(os.environ["GITHUB_OUTPUT"], "a") as o:
+              o.write(f"matrix={json.dumps(m)}\nenvs={json.dumps(envs)}\n")
+          print(f"{len(envs)} envs in {n} jobs")
+          PY
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'variants/*/platformio.ini') }}-${{ matrix.id }}
+          restore-keys: pio-${{ runner.os }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -q --upgrade platformio
+      - name: Build
+        env:
+          FIRMWARE_VERSION: ${{ needs.plan.outputs.fwver }}
+          ENVS: ${{ matrix.envs }}
+        run: |
+          mkdir -p dist out
+          for e in $ENVS; do
+            echo "::group::$e"
+            if bash build.sh build-firmware "$e"; then
+              for f in out/*; do
+                [ -e "$f" ] || continue
+                b=$(basename "$f"); b=${b/-freshInstall-merged.bin/-merged.bin}; b=${b/-upgrade.bin/.bin}
+                mv "$f" "dist/$b"
+              done
+            else echo "::warning::$e failed"; rm -f out/*; fi
+            echo "::endgroup::"
+          done
+          ls dist | wc -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.id }}
+          path: dist/*
+          if-no-files-found: ignore
+
+  release:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fw-*
+          merge-multiple: true
+          path: rel
+      - name: Check results (no publish if Heltec V3 or most envs failed)
+        id: check
+        env:
+          ENVS: ${{ needs.plan.outputs.envs }}
+          FW: ${{ needs.plan.outputs.fwver }}
+        run: |
+          mkdir -p rel
+          python3 - <<'PY'
+          import json, os, collections
+          envs = json.loads(os.environ["ENVS"]); fw = os.environ["FW"]
+          files = os.listdir("rel")
+          built = lambda e: any(f.startswith(f"{e}-{fw}.") or f.startswith(f"{e}-{fw}-") for f in files)
+          failed = [e for e in envs if not built(e)]
+          open("failed.txt", "w").write("\n".join(failed))
+          fam = collections.defaultdict(list)
+          for e in failed: fam[e.split("_")[0]].append(e)
+          with open("failed.md", "w") as f:
+              for k in sorted(fam): f.write(f"- **{k}**: {', '.join(fam[k])}\n")
+          print(f"{len(files)} files, {len(envs)-len(failed)}/{len(envs)} envs built")
+          if failed: print("not built: " + " ".join(failed))
+          miss = [r for r in os.environ["REQUIRED"].split() if not (f"{r}-{fw}.bin" in files and f"{r}-{fw}-merged.bin" in files)]
+          if miss: raise SystemExit(f"required Heltec V3 builds missing: {miss}; not publishing")
+          if len(failed) * 2 > len(envs): raise SystemExit("more than half the envs failed; not publishing")
+          if len(files) > 990: raise SystemExit("too many files for one release (GitHub limit 1000)")
+          PY
+          cd rel && sha256sum * > SHA256SUMS.txt
+      - name: Publish release (marked Latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FW: ${{ needs.plan.outputs.fwver }}
+          SHA: ${{ needs.plan.outputs.sha }}
+          ESM_TAG: ${{ needs.plan.outputs.esm_tag }}
+          ESM_BRANCH: ${{ needs.plan.outputs.esm_branch }}
+          ESM_SHA: ${{ needs.plan.outputs.esm_sha }}
+        run: |
+          set -euo pipefail
+          TITLE="EasySkyMesh ${ESM_TAG} + T-SIM (${FW})"
+          {
+            echo "## ${TITLE}"; echo
+            echo "- Base: [EasySkyMesh ${ESM_TAG}](https://github.com/${ESM_RELEASES}/releases/tag/${ESM_TAG}), source [${ESM_SOURCE}@${ESM_BRANCH}](https://github.com/${ESM_SOURCE}/tree/${ESM_BRANCH}) (${ESM_SHA:0:7}). Power saving is EasySkyMesh's own."
+            echo "- Added here: \`serial.ondemand\` (serial console keeps working during power saving), screenless Heltec V3 envs, \`isReadBusy()\` for every serial interface, and \`tsim wake\`."
+            echo "- Source: [${SHA:0:7}](https://github.com/${GITHUB_REPOSITORY}/commit/${SHA}). Checksums: \`SHA256SUMS.txt\`."
+            echo
+            cat .tsim/notes.md.in
+            echo
+            if [ -s failed.txt ]; then echo "## Not built this time"; echo; cat failed.md; echo; fi
+            echo "<sub>Built by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}</sub>"
+          } > notes.md
+          export TITLE
+          python3 - <<'PY'
+          import json, os, time, urllib.error, urllib.parse, urllib.request
+          T, R, TAG, SHA = os.environ["GH_TOKEN"], os.environ["GITHUB_REPOSITORY"], os.environ["FW"], os.environ["SHA"]
+          API = f"https://api.github.com/repos/{R}"
+          def req(method, url, data=None, ctype="application/json", tries=10):
+              delay = 10
+              for _ in range(tries):
+                  rq = urllib.request.Request(url, data=data, method=method, headers={"Authorization": f"Bearer {T}",
+                       "Accept": "application/vnd.github+json", "Content-Type": ctype, "User-Agent": "esm-sync"})
+                  try:
+                      with urllib.request.urlopen(rq, timeout=600) as r:
+                          b = r.read(); return r.status, (json.loads(b) if b else None)
+                  except urllib.error.HTTPError as e:
+                      body = e.read()[:300]
+                      if e.code in (403, 429) or e.code >= 500:
+                          ra = e.headers.get("retry-after"); wait = int(ra) if ra and ra.isdigit() else delay
+                          print(f"  HTTP {e.code}, retry in {wait}s: {body!r}", flush=True)
+                          time.sleep(min(wait, 900)); delay = min(delay * 2, 600); continue
+                      return e.code, body
+                  except Exception as e:
+                      print(f"  {e}, retry in {delay}s", flush=True); time.sleep(delay); delay = min(delay * 2, 600)
+              raise SystemExit(f"giving up on {method} {url}")
+          notes = open("notes.md").read()
+          rel = None
+          for page in range(1, 4):
+              st, lst = req("GET", f"{API}/releases?per_page=100&page={page}")
+              if st != 200 or not lst: break
+              rel = next((x for x in lst if x["tag_name"] == TAG), None)
+              if rel: break
+          if not rel:
+              st, rel = req("POST", f"{API}/releases", json.dumps({"tag_name": TAG, "target_commitish": SHA,
+                  "name": os.environ["TITLE"], "body": notes, "draft": True}).encode())
+              if st != 201: raise SystemExit(f"could not create release: {st} {rel}")
+          rid = rel["id"]; files = sorted(os.listdir("rel")); have = {}
+          page = 1
+          while True:
+              st, a = req("GET", f"{API}/releases/{rid}/assets?per_page=100&page={page}")
+              if st != 200 or not a: break
+              for x in a: have[x["name"]] = x
+              page += 1
+          for n, x in list(have.items()):
+              if x["state"] != "uploaded" or n not in files or os.path.getsize(f"rel/{n}") != x["size"]:
+                  req("DELETE", f"{API}/releases/assets/{x['id']}"); have.pop(n); time.sleep(1)
+          todo = [f for f in files if f not in have]
+          print(f"{len(have)} assets present, {len(todo)} to upload", flush=True)
+          for i, f in enumerate(todo, 1):
+              st, r = req("POST", f"https://uploads.github.com/repos/{R}/releases/{rid}/assets?name={urllib.parse.quote(f)}",
+                          open(f"rel/{f}", "rb").read(), "application/octet-stream")
+              if st not in (201, 422): raise SystemExit(f"upload of {f} failed: {st} {r}")
+              if i % 50 == 0: print(f"  {i}/{len(todo)}", flush=True)
+              time.sleep(1)
+          st, r = req("PATCH", f"{API}/releases/{rid}", json.dumps({"name": os.environ["TITLE"], "body": notes,
+              "draft": False, "make_latest": "true"}).encode())
+          if st != 200: raise SystemExit(f"could not publish: {st} {r}")
+          st, chk = req("GET", f"{API}/releases/latest")
+          if chk.get("tag_name") != TAG: raise SystemExit(f"published, but Latest is {chk.get('tag_name')}")
+          print(f"published {r['html_url']} with {len(r['assets'])} assets, marked Latest")
+          PY
+      - name: Fast-forward tsim to the released sync
+        if: needs.plan.outputs.synced == 'true'
+        run: git push origin "${{ needs.plan.outputs.sha }}:refs/heads/tsim"
+
+  report-failure:
+    needs: [plan, build, release]
+    if: always() && (needs.plan.result == 'failure' || needs.release.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.esm_tag }}
+          BR: ${{ needs.plan.outputs.esm_branch }}
+          NEW: ${{ needs.plan.outputs.esm_sha }}
+          CONFLICTS: ${{ needs.plan.outputs.conflicts }}
+        run: |
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          if [ -n "$CONFLICTS" ]; then
+            T="Sync conflict: T-SIM changes vs EasySkyMesh ${TAG} (${BR} @ ${NEW:0:7})"
+            B="Nothing was built or released. Conflicting files:
+          $(echo "$CONFLICTS" | tr ',' '\n' | sed 's/^/- /')
+
+          Fix: apply our delta onto ${BR} by hand (see .tsim/sync.sh), push it to tsim with .tsim/upstream.sha = ${NEW}, then Run workflow. Run: $URL"
+          else
+            T="EasySkyMesh sync/build failed${TAG:+ for $TAG}"
+            B="Nothing was released (or the release step stopped). Run: $URL"
+          fi
+          if [ -n "$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$T\" in:title" --json number -q '.[].number')" ]; then echo "issue already open"; exit 0; fi
+          gh issue create -R "$GITHUB_REPOSITORY" --title "$T" --body "$B"

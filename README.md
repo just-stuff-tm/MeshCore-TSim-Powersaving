@@ -1,4 +1,4 @@
-> **This fork**: branch `powersaving-serial` = MeshCore + EasySkyMesh power saving + **serial.ondemand** (the serial console keeps working during power saving) + headless Heltec V3 builds. Downloads are in [Releases](https://github.com/just-stuff-tm/MeshCore/releases) (`vX.Y.Z-powersaving-serial`). How it works and how to build: [serial/README.md](serial/README.md).
+> **EasySkyMesh-TSim**: [EasySkyMesh](https://github.com/IoTThinks/EasySkyMesh) power-saving MeshCore (source: [IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore) `PowerSaving-vNN`) + **serial.ondemand** + screenless Heltec V3 builds + `isReadBusy()` serial fixes + the **`tsim wake`** repeater command, for repeaters managed over LTE by a LilyGO T-SIM ([tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater)). Downloads: [Releases](https://github.com/just-stuff-tm/EasySkyMesh-TSim/releases). Details, release automation and how to flash: [.tsim/README.md](.tsim/README.md). MeshCore is MIT licensed ([license.txt](license.txt)); all upstream credit to MeshCore and IoTThinks.
 
 ## About MeshCore
 

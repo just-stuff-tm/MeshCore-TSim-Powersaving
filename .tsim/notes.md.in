@@ -1,0 +1,16 @@
+## How to flash
+
+Use the MeshCore web flasher, https://flasher.meshcore.io (Chrome or Edge) → **Custom Firmware** → pick the file → **Flash!**
+
+- **ESP32 boards (Heltec V3 and others):** the plain `.bin` updates and keeps the node's identity and settings. `-merged.bin` is a fresh install that erases them.
+- **nRF52 boards (RAK4631, T114, ...):** the `.zip` is a DFU package (Custom Firmware, use **Enter DFU mode** first if needed, or press the board's DFU/reset button twice). Or put the board in its bootloader and drag the `.uf2` onto the USB drive.
+- **Screenless Heltec V3 builds:** `Heltec_v3_repeater_headless`, `Heltec_v3_room_server_headless`, `Heltec_v3_companion_radio_usb_headless`, `Heltec_v3_companion_radio_ble_headless`. Flash them like the normal Heltec V3 files. No display; the OLED is held off from boot to save power.
+
+**After flashing** (serial console at 115200 baud, or remote admin):
+- `powersaving on` turns power saving on.
+- `get serial.ondemand` should answer `on` (the serial console keeps working while the board sleeps). `set serial.ondemand off` gives EasySkyMesh's stock behaviour.
+- `tsim wake` (ESP32 with the console on UART0, e.g. Heltec V3): pulses UART0 TX (GPIO43) low 3 × 20 ms, then prints `TSIM-WAKE: ...` three times 1.5 s apart, to wake a LilyGO T-SIM wired TX43 → 1N5817 → GPIO6 (100 nF to GND). The T-SIM needs firmware that recognises the marker; older T-SIM firmware treats the wake as a Heltec reboot.
+
+## Remote updates and dashboard (T-SIM)
+
+[tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater) manages a solar repeater over LTE through a LilyGO T-SIM wired to the Heltec's serial port (telemetry, settings, CLI) and installs these releases over the air. It always uses the plain `Heltec_v3_repeater...bin` (never `-merged`), so identity and settings are kept.
