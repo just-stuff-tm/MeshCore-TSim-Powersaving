@@ -1,130 +1,75 @@
-> **MeshCore-TSim-Powersaving**: [EasySkyMesh](https://github.com/IoTThinks/EasySkyMesh) power-saving MeshCore (source: [IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore) `PowerSaving-vNN`) + **serial.ondemand** + screenless Heltec V3 builds + `isReadBusy()` serial fixes + the **`tsim wake`** repeater command, for repeaters managed over LTE by a LilyGO T-SIM ([tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater)). Downloads: [Releases](https://github.com/just-stuff-tm/MeshCore-TSim-Powersaving/releases). Details, release automation and how to flash: [.tsim/README.md](.tsim/README.md). MeshCore is MIT licensed ([license.txt](license.txt)); all upstream credit to MeshCore and IoTThinks.
+# MeshCore-TSim-Powersaving
 
-## About MeshCore
+Power-saving MeshCore repeater firmware for Heltec V3 repeaters. A LilyGO T-SIM7672G manages the repeater over LTE with [tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater).
 
-MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
+The tree is [EasySkyMesh](https://github.com/IoTThinks/EasySkyMesh) power-saving MeshCore, from [IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore) branch `PowerSaving-vNN`, plus the T-SIM changes below. Power saving is EasySkyMesh's and is used as shipped. MeshCore's own docs are at [docs.meshcore.io](https://docs.meshcore.io) and [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore).
 
-## 🔍 What is MeshCore?
+## Features
 
-MeshCore now supports a range of LoRa devices, allowing for easy flashing without the need to compile firmware manually. Users can flash a pre-built binary using tools like Adafruit ESPTool and interact with the network through a serial console.
-MeshCore provides the ability to create wireless mesh networks, similar to Meshtastic and Reticulum but with a focus on lightweight multi-hop packet routing for embedded projects. Unlike Meshtastic, which is tailored for casual LoRa communication, or Reticulum, which offers advanced networking, MeshCore balances simplicity with scalability, making it ideal for custom embedded solutions, where devices (nodes) can communicate over long distances by relaying messages through intermediate nodes. This is especially useful in off-grid, emergency, or tactical situations where traditional communication infrastructure is unavailable.
+- **EasySkyMesh power saving.** ESP32 light sleep from EasySkyMesh. `powersaving on` turns it on.
+- **serial.ondemand.** On an ESP32 whose console is UART0, UART0 RX wakes the chip from light sleep and the board stays awake for 15 seconds after the last byte, so the serial CLI works while power saving is on. `set serial.ondemand on|off` (default on, stored in NVS) and `get serial.ondemand`. The byte that wakes the board is lost: send CR or LF, wait about 100 ms, then the command.
+- **Screen and headless Heltec V3 builds.** `Heltec_v3_repeater` keeps the OLED. `Heltec_v3_repeater_headless` is the screenless repeater: the OLED is held in reset from boot. The same headless builds exist for the room server and the USB and BLE companion radios (`Heltec_v3_room_server_headless`, `Heltec_v3_companion_radio_usb_headless`, `Heltec_v3_companion_radio_ble_headless`).
+- **isReadBusy() serial fixes.** The Ethernet serial path (CH390 and RAK13800) stays busy while a frame is only partly received. RP2040 BLE implements `isReadBusy()`. A `NONE` macro from meshsolar's headers is undefined around `InterfaceType::NONE` so that enum still compiles.
+- **`tsim wake` and `tsim last`.** Wake a LilyGO T-SIM on the Heltec serial port and send it a command. See below.
 
-## ⚡ Key Features
+## `tsim wake` and `tsim last`
 
-* Multi-Hop Packet Routing
-  * Devices can forward messages across multiple nodes, extending range beyond a single radio's reach.
-  * Supports up to a configurable number of hops to balance network efficiency and prevent excessive traffic.
-  * Nodes use fixed roles where "Companion" nodes are not repeating messages at all to prevent adverse routing paths from being used.
-* Supports LoRa Radios – Works with Heltec, RAK Wireless, and other LoRa-based hardware.
-* Decentralized & Resilient – No central server or internet required; the network is self-healing.
-* Low Power Consumption – Ideal for battery-powered or solar-powered devices.
-* Simple to Deploy – Pre-built example applications make it easy to get started.
+Serial CLI or remote admin. ESP32 with the console on UART0 (Heltec V3). Works with serial.ondemand on or off.
 
-## 🎯 What Can You Use MeshCore For?
+Wiring for the wake pulse: Heltec TX (GPIO43) through a 1N5817 to T-SIM GPIO6, 100 nF from GPIO6 to ground, GPIO6 internal pull-up. The T-SIM wakes on GPIO6 going low. Commands after that use the normal serial link, Heltec TX to T-SIM RX, 115200 baud.
 
-* Off-Grid Communication: Stay connected even in remote areas.
-* Emergency Response & Disaster Recovery: Set up instant networks where infrastructure is down.
-* Outdoor Activities: Hiking, camping, and adventure racing communication.
-* Tactical & Security Applications: Military, law enforcement, and private security use cases.
-* IoT & Sensor Networks: Collect data from remote sensors and relay it back to a central location.
+`tsim wake [status|modem_reset|<word>]`
 
-## 🚀 How to Get Started
+1. Flushes the console, then inverts UART0 TX inside the UART three times for 20 ms, with 100 ms between pulses. GPIO43 stays on the UART, so the console keeps working.
+2. Replies at once, for example `OK - tsim wake STATUS seq 4711: woke, sending; result in ~8 s (tsim last)`. The `~8 s` is the 1 s boot wait plus five tries at 1.5 s. The sequence number is the one for this attempt.
+3. After 1 second a task sends `@TSIM <CMD> <seq>` every 1.5 s, up to 5 times, until the T-SIM answers `@TSIM ACK <seq>`. That answer is taken silently (no reply line). The board stays out of light sleep until the attempt finishes.
+4. Prints `TSIM-WAKE: <CMD> seq <n>: ACK after <ms> ms (<sent> sent)`, or `TSIM-WAKE: <CMD> seq <n>: no ACK after 5 tries (T-SIM asleep, wire, or old firmware)`. The time and the send count are measured.
 
-- Watch the [MeshCore QuickStart Playlist](https://www.youtube.com/watch?v=iaFltojJrAc&list=PLshzThxhw4O4WU_iZo3NmNZOv6KMrUuF9) by The Comms Channel
-- Watch the [MeshCore Technical Presentation](https://www.youtube.com/watch?v=OwmkVkZQTf4) by Liam Cottle.
-- Read through our [Frequently Asked Questions](./docs/faq.md) and [Documentation](https://docs.meshcore.io).
-- Flash the MeshCore firmware on a supported device.
-- Connect with a supported client.
+`tsim last` prints that same line, prefixed with `> `. While a wake is still running it prints `> (running) ` and the last result (or `none yet` if nothing has finished). On a board whose console is not UART0, `tsim wake` returns an error and `tsim last` prints `> n/a`.
 
-For developers:
+The command word: a bare `tsim wake` sends `WAKE`; `status` sends `STATUS`; `modem_reset` sends `MODEM_RESET`. Any other word of letters, digits, and `_`, up to 15 characters, is sent in upper case. The T-SIM allowlist decides which words it accepts. The sequence number starts at a random value at boot and then counts up. A second `tsim wake` while one is running returns `Error: tsim wake already running (tsim last)`.
 
-- Install [PlatformIO](https://docs.platformio.org) in [Visual Studio Code](https://code.visualstudio.com).
-- Clone and open the MeshCore repository in Visual Studio Code.
-- See the example applications you can modify and run:
-  - [Companion Radio](./examples/companion_radio) - For use with an external chat app, over BLE, USB or Wi-Fi.
-  - [KISS Modem](./examples/kiss_modem) - Serial KISS protocol bridge for host applications. ([protocol docs](./docs/kiss_modem_protocol.md))
-  - [Simple Repeater](./examples/simple_repeater) - Extends network coverage by relaying messages.
-  - [Simple Room Server](./examples/simple_room_server) - A simple BBS server for shared Posts.
-  - [Simple Secure Chat](./examples/simple_secure_chat) - Secure terminal based text communication between devices.
-  - [Simple Sensor](./examples/simple_sensor) - Remote sensor node with telemetry and alerting.
+The repeater echoes serial input, so the T-SIM sees its own `@TSIM ACK` come back and must ignore that echo.
 
-The Simple Secure Chat example can be interacted with through the Serial Monitor in Visual Studio Code, or with a Serial USB Terminal on Android.
+On the T-SIM, [tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater) v1.7.7 or newer answers these frames: `WAKE` leaves the modem asleep, `STATUS` sends a status report, `MODEM_RESET` runs modem recovery. Older T-SIM firmware treats the GPIO6 pulse as a Heltec reboot and ignores `@TSIM` frames.
 
-## ⚡️ MeshCore Flasher
+Build-time knobs, with those defaults: `TSIM_WAKE_PULSES` 3, `TSIM_WAKE_LOW_MS` 20, `TSIM_WAKE_GAP_MS` 100, `TSIM_WAKE_BOOT_MS` 1000, `TSIM_WAKE_RETRY_MS` 1500, `TSIM_WAKE_TRIES` 5.
 
-We have prebuilt firmware ready to flash on supported devices.
+## Downloads
 
-- Launch https://meshcore.io/flasher
-- Select a supported device
-- Flash one of the firmware types:
-  - Companion, Repeater or Room Server
-- Once flashing is complete, you can connect with one of the MeshCore clients below.
+Builds are on [Releases](https://github.com/just-stuff-tm/MeshCore-TSim-Powersaving/releases).
 
-## 📱 MeshCore Clients
+The version, the git tag, the release title, and the firmware `ver` string are `MeshCore-TSim-Powersaving<NN>.<n>`. Example: `MeshCore-TSim-Powersaving18.1`. `NN` is the EasySkyMesh release number (`PowerSaving18` becomes 18). `n` is this repo's build on that upstream (18.1, 18.2, and so on) and starts again at `.1` for the next PowerSaving release.
 
-**Companion Firmware**
+File names, EasySkyMesh style:
 
-The companion firmware can be connected to via BLE, USB or Wi-Fi depending on the firmware type you flashed.
+- `<env>-MeshCore-TSim-PowersavingNN.n-upgrade.bin` updates the board and keeps identity and settings.
+- `<env>-MeshCore-TSim-PowersavingNN.n-freshInstall-merged.bin` is a full flash and wipes identity and settings.
+- Screenless Heltec V3 repeater: env `Heltec_v3_repeater_headless`, same two suffixes.
+- nRF52 builds are `<env>-MeshCore-TSim-PowersavingNN.n.uf2` and `.zip`.
+- Each release includes `SHA256SUMS.txt`.
 
-- Web: https://app.meshcore.nz
-- Android: https://play.google.com/store/apps/details?id=com.liamcottle.meshcore.android
-- iOS: https://apps.apple.com/us/app/meshcore/id6742354151?platform=iphone
-- NodeJS: https://github.com/liamcottle/meshcore.js
-- Python: https://github.com/fdlamotte/meshcore-cli
+## How releases are built
 
-**Repeater and Room Server Firmware**
+[`.github/workflows/easyskymesh-sync.yml`](.github/workflows/easyskymesh-sync.yml) runs from Actions → Run workflow. It reads the newest EasySkyMesh release and the `IoTThinks/MeshCore` `PowerSaving-vNN` branch named in that release. When that branch has moved, [`.tsim/sync.sh`](.tsim/sync.sh) reapplies this repo's changes on it, then the workflow builds the repeater, room server, and Heltec V3 environments. A manual run leaves a draft unless publish is selected. The daily schedule in the workflow file is commented out. Inputs, the publish checks, and the rest of the flow are in [`.tsim/README.md`](.tsim/README.md).
 
-The repeater and room server firmware can be set up via USB in the web config tool.
+## Flashing
 
-- https://config.meshcore.io
+Use the MeshCore web flasher, <https://flasher.meshcore.io> (Chrome or Edge): Custom Firmware, choose the file, Flash.
 
-They can also be managed via LoRa in the mobile app by using the Remote Management feature.
+- Heltec V3 and other ESP32 boards: `-upgrade.bin` keeps identity and settings. `-freshInstall-merged.bin` erases them.
+- Screenless Heltec V3: flash `Heltec_v3_repeater_headless` the same way. The OLED stays held in reset.
+- nRF52 boards (RAK4631, Heltec T114, and others): the `.zip` is a DFU package (enter DFU mode first if the flasher asks). Or put the board in its bootloader and copy the `.uf2` onto the USB drive.
 
-## 🛠 Hardware Compatibility
+After flashing, on the serial console at 115200 baud or by remote admin: `powersaving on`. `get serial.ondemand` answers `on` unless it was turned off.
 
-MeshCore is designed for devices listed in the [MeshCore Flasher](https://meshcore.io/flasher)
+tsim-remote-updater installs `Heltec_v3_repeater_headless-…-upgrade.bin` over LTE by default (stock MeshCore is the other choice), which keeps identity and settings.
 
-## 📜 License
+## License
 
-MeshCore is open-source software released under the MIT License. You are free to use, modify, and distribute it for personal and commercial projects.
+MIT. The upstream copyright stays in [license.txt](license.txt): Copyright (c) 2025 Scott Powell / rippleradios.com, with the MIT permission text.
 
-## Contributing
+## Credits
 
-Please submit PR's using 'dev' as the base branch!
-For minor changes just submit your PR and we'll try to review it, but for anything more 'impactful' please open an Issue first and start a discussion. It is better to sound out what it is you want to achieve first, and try to come to a consensus on what the best approach is, especially when it impacts the structure or architecture of this codebase.
-
-Here are some general principles you should try to adhere to:
-* Keep it simple. Please, don't think like a high-level lang programmer. Think embedded, and keep code concise, without any unnecessary layers.
-* No dynamic memory allocation, except during setup/begin functions.
-* Use the same brace and indenting style that's in the core source modules. (A .clang-format is probably going to be added soon, but please do NOT retroactively re-format existing code. This just creates unnecessary diffs that make finding problems harder)
-
-Help us prioritize! Please react with thumbs-up to issues/PRs you care about most. We look at reaction counts when planning work.
-
-### Running unit tests
-
-To run unit tests, run the following command:
-
-```bash
-pio test --environment native --verbose
-```
-
-## Road-Map / To-Do
-
-There are a number of fairly major features in the pipeline, with no particular time-frames attached yet. In very rough chronological order:
-- [X] Companion radio: UI redesign
-- [X] Repeater + Room Server: add ACL's (like Sensor Node has)
-- [X] Standardise Bridge mode for repeaters
-- [ ] Repeater/Bridge: Standardise the Transport Codes for zoning/filtering
-- [X] Core + Repeater: enhanced zero-hop neighbour discovery
-- [ ] Core: round-trip manual path support
-- [ ] Companion + Apps: support for multiple sub-meshes (and 'off-grid' client repeat mode)
-- [ ] Core + Apps: support for LZW message compression
-- [ ] Core: dynamic CR (Coding Rate) for weak vs strong hops
-- [ ] Core: new framework for hosting multiple virtual nodes on one physical device
-- [ ] V2 protocol spec: discussion and consensus around V2 packet protocol, including path hashes, new encryption specs, etc
-
-## 📞 Get Support
-
-- Report bugs and request features on the [GitHub Issues](https://github.com/meshcore-dev/meshcore/issues) page.
-- Find additional guides and components on [my site](https://buymeacoffee.com/ripplebiz).
-- Join [MeshCore Discord](https://meshcore.gg) to chat with the developers and get help from the community.
+- **EasySkyMesh** (IoTThinks), <https://github.com/IoTThinks/EasySkyMesh>. Power saving is from that project. Source: [IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore) `PowerSaving-vNN`.
+- **MeshCore** (meshcore-dev/MeshCore), <https://github.com/meshcore-dev/MeshCore>. MIT, [license.txt](license.txt). Docs: <https://docs.meshcore.io>.
