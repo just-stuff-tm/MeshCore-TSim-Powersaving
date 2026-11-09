@@ -42,6 +42,9 @@ protected:
   int16_t _rx_ps_last_error;
   uint32_t n_rx_ps_arm_failures;
   RxPowerSavingArmRetryState _rx_ps_arm_retry;
+  uint32_t _last_rx_ms = 0;       // millis() of last good packet, 0 = none this boot
+  uint32_t _last_tx_ok_ms = 0;    // millis() of last completed TX
+  uint16_t _startrx_fail_streak = 0;
 
   bool _nf_calib_active;
   unsigned long _nf_last_calib;
@@ -136,6 +139,17 @@ public:
   void resetAGC() override;
 
   void loop() override;
+
+  // Radio-health watchdog (repeater). Stage 1 rearms RX. Stage 2 is a warm
+  // SX126x-style reset (doResetAGC) plus the caller's freq/bw/sf/cr/tx/rx-boost.
+  uint32_t getLastRxMs() const { return _last_rx_ms; }
+  uint32_t getLastTxOkMs() const { return _last_tx_ok_ms; }
+  uint16_t getStartRxFailStreak() const { return _startrx_fail_streak; }
+  bool radioHealthSupported() const { return true; }
+  bool isRxArmed() const;
+  bool radioHealthBusy();
+  bool radioHealthRearm();
+  bool radioHealthReinit(float freq, float bw, uint8_t sf, uint8_t cr, int8_t tx_dbm, bool rx_boost);
 
   // PowerSaving variant
   uint32_t getCADBusyCount() const { return _cad_busy_count; }

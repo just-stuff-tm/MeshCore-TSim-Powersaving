@@ -60,6 +60,7 @@ public:
   uint8_t powersaving_enabled = 0; // boolean
   // PowerSaving variant
   uint8_t reboot_interval = 0; // hours, 0-255 (default 0=disable)
+  uint8_t radio_health_min = 45; // quiet minutes before radio-health recovery; 0 = off
   // Gps settings
   uint8_t gps_enabled = 0;
   uint32_t gps_interval = 0; // in seconds
@@ -185,6 +186,7 @@ private:
       def("pwr_sav_en", _parent->powersaving_enabled);
       // PowerSaving variant
       def("pwr_reboot_int", _parent->reboot_interval);
+      def("rh_tmo", _parent->radio_health_min);
     }
   public:
     PowerPrefs(NodePrefs* parent) : _parent(parent) { }

@@ -955,6 +955,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   // PowerSaving variant
   // PowerSaving defaults
   _prefs.powersaving_enabled = 1;
+  _prefs.radio_health_min = 45;   // radio-health quiet time, minutes (0 = off)
 
   // RXPS defaults - Balanced profile
   _prefs.rxps.enabled = 1;
@@ -1185,12 +1186,166 @@ void MyMesh::onDefaultRegionChanged(const RegionEntry* r) {
   }
 }
 
+// Radio-health watchdog. Default on (45 min). Escalates only after this boot
+// has heard the mesh, then only when RX stays quiet. Stage 3 reboots.
+#ifndef RADIO_HEALTH_SETTLE_SECS
+#define RADIO_HEALTH_SETTLE_SECS (10UL * 60UL)
+#endif
+#ifndef RADIO_HEALTH_STAGE_GAP_SECS
+#define RADIO_HEALTH_STAGE_GAP_SECS (15UL * 60UL)
+#endif
+
+#if defined(ESP32)
+static RTC_NOINIT_ATTR uint32_t s_rh_magic;
+static RTC_NOINIT_ATTR uint8_t s_rh_s1, s_rh_s2, s_rh_s3, s_rh_why;
+#else
+static uint32_t s_rh_magic;
+static uint8_t s_rh_s1, s_rh_s2, s_rh_s3, s_rh_why;
+#endif
+static const uint32_t RH_MAGIC = 0x52484431u; // 'RHD1'
+
+static void rhEnsure() {
+  if (s_rh_magic == RH_MAGIC) return;
+  s_rh_magic = RH_MAGIC;
+  s_rh_s1 = s_rh_s2 = s_rh_s3 = s_rh_why = 0;
+}
+
+static uint8_t rhTimeoutMin(uint8_t v) {
+  if (v == 0) return 0;
+  if (v < 15) return 15;
+  if (v > 240) return 240;
+  return v;
+}
+
+static const char* rhWhyName(uint8_t why) {
+  return why == 1 ? "quiet" : why == 2 ? "startrx" : "none";
+}
+
+uint32_t MyMesh::radioHealthRxAgeSecs() const {
+  uint32_t last = radio_driver.getLastRxMs();
+  if (!last) return (uint32_t)(uptime_millis / 1000ULL);
+  return (uint32_t)((millis() - last) / 1000UL);
+}
+
+uint32_t MyMesh::radioHealthTxAgeSecs() const {
+  uint32_t last = radio_driver.getLastTxOkMs();
+  if (!last) return (uint32_t)(uptime_millis / 1000ULL);
+  return (uint32_t)((millis() - last) / 1000UL);
+}
+
+void MyMesh::radioHealthAppend(char* reply, size_t cap, const char* extra) const {
+  size_t n = strlen(reply);
+  size_t m = strlen(extra);
+  if (n < 2 || reply[n - 1] != '}' || n + m >= cap) return;
+  reply[n - 1] = 0;
+  memcpy(reply + n - 1, extra, m + 1);
+}
+
+void MyMesh::radioHealthNote(uint8_t stage, uint8_t why) {
+  rhEnsure();
+  if (stage == 1 && s_rh_s1 < 255) s_rh_s1++;
+  else if (stage == 2 && s_rh_s2 < 255) s_rh_s2++;
+  else if (stage == 3 && s_rh_s3 < 255) s_rh_s3++;
+  s_rh_why = why;
+  char line[144];
+  snprintf(line, sizeof(line),
+           "RH stg=%u why=%s rx=%lu age=%lu txage=%lu armed=%u s=%u/%u/%u up=%lu rr=%lu",
+           (unsigned)stage, rhWhyName(why),
+           (unsigned long)radio_driver.getPacketsRecv(),
+           (unsigned long)radioHealthRxAgeSecs(),
+           (unsigned long)radioHealthTxAgeSecs(),
+           radio_driver.isRxArmed() ? 1u : 0u,
+           (unsigned)s_rh_s1, (unsigned)s_rh_s2, (unsigned)s_rh_s3,
+           (unsigned long)(uptime_millis / 1000ULL),
+           (unsigned long)board.getResetReason());
+  Serial.println(line);
+}
+
+void MyMesh::radioHealthTick() {
+  rhEnsure();
+  uint8_t mins = rhTimeoutMin(_prefs.radio_health_min);
+  if (mins == 0 || !radio_driver.radioHealthSupported()) return;
+
+  uint32_t now = millis();
+  if (_rh_check_ms && (uint32_t)(now - _rh_check_ms) < 1000UL) return;
+  _rh_check_ms = now;
+
+  uint32_t up_s = (uint32_t)(uptime_millis / 1000ULL);
+  bool heard = radio_driver.getPacketsRecv() > 0;
+#if MAX_NEIGHBOURS
+  if (!heard) {
+    for (int i = 0; i < MAX_NEIGHBOURS; i++) {
+      if (neighbours[i].heard_timestamp != 0) { heard = true; break; }
+    }
+  }
+#endif
+  if (!_rh_proven && up_s >= RADIO_HEALTH_SETTLE_SECS && heard) _rh_proven = true;
+  if (!_rh_proven) return;
+
+  // Never touch the radio mid-TX or while a frame is on the air.
+  if (isTransmitting() || radio_driver.radioHealthBusy()) return;
+
+  uint32_t last = radio_driver.getLastRxMs();
+  if (_rh_step > 0 && last != 0 && (int32_t)(last - _rh_step_ms) >= 0) {
+    _rh_step = 0;   // a packet landed after the last recovery
+    return;
+  }
+
+  uint32_t age_s = radioHealthRxAgeSecs();
+  bool quiet = age_s >= (uint32_t)mins * 60UL;
+  bool startrx = radio_driver.getStartRxFailStreak() >= 3;
+  if (!quiet && !startrx) {
+    _rh_step = 0;
+    return;
+  }
+  if (_rh_step > 0 && (uint32_t)((now - _rh_step_ms) / 1000UL) < RADIO_HEALTH_STAGE_GAP_SECS) return;
+  if (_rh_step >= 2 && !quiet) return;   // reboot only after the quiet timeout
+
+  uint8_t why = quiet ? 1 : 2;
+  if (_rh_step <= 0) {
+    radio_driver.radioHealthRearm();
+    radioHealthNote(1, why);
+    _rh_step = 1;
+    _rh_step_ms = millis();
+    return;
+  }
+  if (_rh_step == 1) {
+    if (radio_driver.radioHealthReinit(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr,
+                                       _prefs.tx_power_dbm, _prefs.rx_boosted_gain != 0)) {
+      _prefs.getRadioPrefs()->applyRxPowerSaving(_prefs.sf, _prefs.bw);
+      radio_driver.radioHealthRearm();
+    }
+    radioHealthNote(2, why);
+    _rh_step = 2;
+    _rh_step_ms = millis();
+    return;
+  }
+  radioHealthNote(3, why);
+  Serial.flush();
+  board.reboot();
+}
+
 void MyMesh::formatStatsReply(char *reply) {
   StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
+  rhEnsure();
+  char extra[112];
+  snprintf(extra, sizeof(extra),
+           ",\"rx\":%lu,\"rxage\":%lu,\"rh1\":%u,\"rh2\":%u,\"rh3\":%u,\"why\":%u,\"rr\":%lu}",
+           (unsigned long)radio_driver.getPacketsRecv(),
+           (unsigned long)radioHealthRxAgeSecs(),
+           (unsigned)s_rh_s1, (unsigned)s_rh_s2, (unsigned)s_rh_s3,
+           (unsigned)s_rh_why, (unsigned long)board.getResetReason());
+  radioHealthAppend(reply, 160, extra);
 }
 
 void MyMesh::formatRadioStatsReply(char *reply) {
   StatsFormatHelper::formatRadioStats(reply, _radio, radio_driver, getTotalAirTime(), getReceiveAirTime());
+  rhEnsure();
+  char extra[80];
+  snprintf(extra, sizeof(extra), ",\"rxage\":%lu,\"rh1\":%u,\"rh2\":%u,\"rh3\":%u}",
+           (unsigned long)radioHealthRxAgeSecs(),
+           (unsigned)s_rh_s1, (unsigned)s_rh_s2, (unsigned)s_rh_s3);
+  radioHealthAppend(reply, 160, extra);
 }
 
 void MyMesh::formatPacketStatsReply(char *reply) {
@@ -1303,6 +1458,38 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (strcmp(command, "get radio.health") == 0) {
+    rhEnsure();
+    uint8_t mins = rhTimeoutMin(_prefs.radio_health_min);
+    snprintf(reply, 160,
+             "to=%u proven=%u rx=%lu age=%lu txage=%lu armed=%u step=%u s=%u/%u/%u why=%s rr=%lu up=%lu",
+             (unsigned)mins, _rh_proven ? 1u : 0u,
+             (unsigned long)radio_driver.getPacketsRecv(),
+             (unsigned long)radioHealthRxAgeSecs(),
+             (unsigned long)radioHealthTxAgeSecs(),
+             radio_driver.isRxArmed() ? 1u : 0u,
+             (unsigned)_rh_step,
+             (unsigned)s_rh_s1, (unsigned)s_rh_s2, (unsigned)s_rh_s3,
+             rhWhyName(s_rh_why),
+             (unsigned long)board.getResetReason(),
+             (unsigned long)(uptime_millis / 1000ULL));
+  } else if (memcmp(command, "set radio.health.timeout", 24) == 0 &&
+             (command[24] == 0 || command[24] == ' ')) {
+    const char* arg = command + 24;
+    while (*arg == ' ') arg++;
+    if (*arg == 0) {
+      strcpy(reply, "Error: set radio.health.timeout <min>");
+    } else {
+      int m = atoi(arg);
+      if (m != 0 && (m < 15 || m > 240)) {
+        strcpy(reply, "Error: timeout is 0 (off) or 15-240 min");
+      } else {
+        _prefs.radio_health_min = (uint8_t)m;
+        savePrefs();
+        if (m == 0) strcpy(reply, "OK - radio.health off");
+        else snprintf(reply, 160, "OK - radio.health.timeout %d min", m);
+      }
+    }
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1355,6 +1542,8 @@ void MyMesh::loop() {
   uint32_t now = millis();
   uptime_millis += now - last_millis;
   last_millis = now;
+
+  radioHealthTick();
 }
 
 // To check if there is pending work

@@ -109,6 +109,13 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   float pending_bw;
   uint8_t pending_sf;
   uint8_t pending_cr;
+  // Radio-health watchdog. Proven stays false until this boot has heard a
+  // packet (or a neighbor) after the settle window, so a quiet install does
+  // not reboot itself.
+  bool _rh_proven = false;
+  uint8_t _rh_step = 0;
+  uint32_t _rh_step_ms = 0;
+  uint32_t _rh_check_ms = 0;
   int  matching_peer_indexes[MAX_CLIENTS];
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
@@ -117,6 +124,11 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
 #endif
 
   void putNeighbour(const mesh::Identity& id, uint32_t timestamp, float snr);
+  void radioHealthTick();
+  void radioHealthNote(uint8_t stage, uint8_t why);
+  uint32_t radioHealthRxAgeSecs() const;
+  uint32_t radioHealthTxAgeSecs() const;
+  void radioHealthAppend(char* reply, size_t cap, const char* extra) const;
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
   uint8_t handleAnonRegionsReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data);
   uint8_t handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data);

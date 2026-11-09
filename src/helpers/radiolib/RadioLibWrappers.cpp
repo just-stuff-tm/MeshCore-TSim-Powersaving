@@ -257,7 +257,9 @@ void RadioLibWrapper::startRecv() {
   int err = startReceiveMode();
   if (err == RADIOLIB_ERR_NONE) {
     state = STATE_RX;
+    _startrx_fail_streak = 0;
   } else {
+    if (_startrx_fail_streak < 65535) _startrx_fail_streak++;
     MESH_DEBUG_PRINTLN("RadioLibWrapper: error: startReceive(%d)", err);
   }
 }
@@ -404,6 +406,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
         } else {
         //  Serial.print("  readData() -> "); Serial.println(len);
           n_recv++;
+          _last_rx_ms = millis();
         }
       }
     }
@@ -445,6 +448,7 @@ bool RadioLibWrapper::isSendComplete() {
   if (state & STATE_INT_READY) {
     state = STATE_IDLE;
     n_sent++;
+    _last_tx_ok_ms = millis();
     return true;
   }
   return false;
@@ -504,6 +508,41 @@ static float snr_threshold[] = {
     -17.5,// SF11 needs at least -17.5 dB SNR
     -20   // SF12 needs at least -20 dB SNR
 };
+
+bool RadioLibWrapper::isRxArmed() const {
+  return _rx_ps_armed || (state & ~STATE_INT_READY) == STATE_RX;
+}
+
+bool RadioLibWrapper::radioHealthBusy() {
+  if ((state & ~STATE_INT_READY) == STATE_TX_WAIT) return true;
+  if (isPacketPendingOrReceiving()) return true;
+  if (_nf_calib_active) return true;
+  return false;
+}
+
+bool RadioLibWrapper::radioHealthRearm() {
+  if (radioHealthBusy()) return false;
+  requestRestartRecv();
+  if ((state & ~STATE_INT_READY) != STATE_RX) startRecv();
+  return (state & ~STATE_INT_READY) == STATE_RX;
+}
+
+// Warm reset: existing doResetAGC (sx126xResetAGC on SX1262) then restore
+// modem settings. Does not start RX; the caller rearms after RXPS is reapplied.
+bool RadioLibWrapper::radioHealthReinit(float freq, float bw, uint8_t sf, uint8_t cr, int8_t tx_dbm, bool rx_boost) {
+  if (radioHealthBusy()) return false;
+  if (_rx_ps_armed) stopReceiveDutyCycle();
+  doResetAGC();
+  state = STATE_IDLE;
+  _startrx_fail_streak = 0;
+  _rx_ps_arm_retry.reset();
+  setParams(freq, bw, sf, cr);
+  setTxPower(tx_dbm);
+  setRxBoostedGainMode(rx_boost);
+  if ((state & ~STATE_INT_READY) == STATE_TX_WAIT) return false;
+  state = STATE_IDLE;
+  return true;
+}
 
 float RadioLibWrapper::packetScoreInt(float snr, int sf, int packet_len) {
   if (sf < 7) return 0.0f;

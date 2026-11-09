@@ -47,6 +47,16 @@ public:
 
   uint32_t intID();
   void setTxPower(uint8_t dbm);
+
+  // Repeater radio-health hooks. ESP-NOW has no SX126x to reinit.
+  uint32_t getLastRxMs() const { return 0; }
+  uint32_t getLastTxOkMs() const { return 0; }
+  uint16_t getStartRxFailStreak() const { return 0; }
+  bool radioHealthSupported() const { return false; }
+  bool isRxArmed() const { return isInRecvMode(); }
+  bool radioHealthBusy() const { return false; }
+  bool radioHealthRearm() { return false; }
+  bool radioHealthReinit(float, float, uint8_t, uint8_t, int8_t, bool) { return false; }
 };
 
 #if ESPNOW_DEBUG_LOGGING && ARDUINO
