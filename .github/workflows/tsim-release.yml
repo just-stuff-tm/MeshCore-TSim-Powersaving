@@ -1,0 +1,53 @@
+# MeshCore-TSim-Powersaving release: push a tag MeshCore-TSim-Powersaving<N>.<B> to build the
+# Heltec V3 repeater images (screen + headless) and publish them as the Latest release.
+# Notes come from .tsim/RELEASE_NOTES.md. No artifacts are stored (build and upload in one job).
+name: TSim release
+
+on:
+  push:
+    tags:
+      - 'MeshCore-TSim-Powersaving*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      ENVS: Heltec_v3_repeater Heltec_v3_repeater_headless
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-tsim-${{ runner.os }}-${{ hashFiles('platformio.ini', 'variants/heltec_v3*/platformio.ini') }}
+          restore-keys: pio-tsim-${{ runner.os }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install -q --upgrade platformio
+      - name: Build
+        run: |
+          export FIRMWARE_VERSION="${GITHUB_REF_NAME}"
+          case "$FIRMWARE_VERSION" in MeshCore-TSim-Powersaving*) ;; *) echo "run from a MeshCore-TSim-Powersaving* tag"; exit 1;; esac
+          mkdir -p out
+          for e in $ENVS; do bash build.sh build-firmware "$e"; done
+          ls -l out
+          for e in $ENVS; do
+            for s in upgrade.bin freshInstall-merged.bin; do test -s "out/$e-$FIRMWARE_VERSION-$s" || { echo "missing $e $s"; exit 1; }; done
+          done
+          (cd out && sha256sum * | tee SHA256SUMS.txt)
+      - name: Publish
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file .tsim/RELEASE_NOTES.md --latest --verify-tag
+          fi

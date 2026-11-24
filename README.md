@@ -1,3 +1,7 @@
+## MeshCore-TSim-Powersaving
+
+EasySkyMesh PowerSaving18 plus a serial console that works during power saving (`set/get serial.ondemand`, default on), and a headless Heltec V3 repeater build. It's made for Heltec V3 repeaters controlled over serial by a LilyGO T-SIM: see [tsim-remote-updater](https://github.com/just-stuff-tm/tsim-remote-updater). Releases: [MeshCore-TSim-Powersaving releases](https://github.com/just-stuff-tm/MeshCore-TSim-Powersaving/releases). Credits: [EasySkyMesh](https://github.com/IoTThinks/EasySkyMesh) (power saving) and [MeshCore](https://github.com/meshcore-dev/MeshCore).
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
