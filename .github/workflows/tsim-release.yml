@@ -8,6 +8,10 @@ on:
     tags:
       - 'MeshCore-TSim-Powersaving*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (MeshCore-TSim-Powersaving<N>.<B>); must already exist
+        required: true
 
 permissions:
   contents: write
@@ -18,6 +22,7 @@ jobs:
     env:
       ENVS: Heltec_v3_repeater Heltec_v3_repeater_headless
       GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -35,19 +40,19 @@ jobs:
       - run: pip install -q --upgrade platformio
       - name: Build
         run: |
-          export FIRMWARE_VERSION="${GITHUB_REF_NAME}"
+          export FIRMWARE_VERSION="${TAG}"
           case "$FIRMWARE_VERSION" in MeshCore-TSim-Powersaving*) ;; *) echo "run from a MeshCore-TSim-Powersaving* tag"; exit 1;; esac
-          mkdir -p out
-          for e in $ENVS; do bash build.sh build-firmware "$e"; done
-          ls -l out
+          mkdir -p dist
+          for e in $ENVS; do bash build.sh build-firmware "$e"; mv out/* dist/; done   # build.sh empties out/ each run
+          rm -rf out && mv dist out && ls -l out
           for e in $ENVS; do
             for s in upgrade.bin freshInstall-merged.bin; do test -s "out/$e-$FIRMWARE_VERSION-$s" || { echo "missing $e $s"; exit 1; }; done
           done
           (cd out && sha256sum * | tee SHA256SUMS.txt)
       - name: Publish
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
           else
-            gh release create "$GITHUB_REF_NAME" out/* --title "$GITHUB_REF_NAME" --notes-file .tsim/RELEASE_NOTES.md --latest --verify-tag
+            gh release create "$TAG" out/* --title "$TAG" --notes-file .tsim/RELEASE_NOTES.md --latest --verify-tag
           fi
