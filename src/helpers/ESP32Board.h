@@ -2,6 +2,7 @@
 
 #include <MeshCore.h>
 #include <Arduino.h>
+#include <helpers/SerialWake.h>  // serial-in-PowerSaving
 
 #ifndef USER_BTN_PRESSED
 #define USER_BTN_PRESSED LOW
@@ -87,6 +88,9 @@ public:
       return;
     }
 
+    // Serial CLI in use: stay awake (serial-in-PowerSaving)
+    if (SerialWake::beforeSleep()) { delay(1); return; }
+
     // Set GPIO wakeup
     gpio_num_t wakeupPin = (gpio_num_t)getIRQGpio();
 
@@ -130,6 +134,7 @@ public:
 
     // Enable CPU interrupt servicing
     portEXIT_CRITICAL(&sleepMux);
+    SerialWake::afterSleep();  // serial-in-PowerSaving (outside the critical section)
   }
 
   uint8_t getStartupReason() const override { return startup_reason; }
